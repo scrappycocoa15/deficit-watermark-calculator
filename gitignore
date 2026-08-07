@@ -1,0 +1,4 @@
+# Git — never commit secrets
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
