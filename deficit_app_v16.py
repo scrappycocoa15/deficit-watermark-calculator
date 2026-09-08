@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """
-Deficit Watermark Calculator — Streamlit App
-Connects to Salesforce via Session ID, runs Sales + Terminations + CSEs reports,
-computes FIFO watermarks, and displays results with Team / Manager / Rep filters.
+Deficit Watermark Calculator — Streamlit App  (v17)
+Connects to Salesforce via Session ID, runs Sales + Terminations reports (+ optional
+CSEs), computes FIFO watermarks, and displays results with Team / Leader / Rep filters.
+
+Org-chart hierarchy (15 leaders, 100 reps) is hardcoded from
+"2026 US SMB Sales Org Chart.xlsx" and used as the primary source for
+Team / Leader assignments — no CSEs report is required for those filters.
+CSEs is still optional and used only for the Excel team-sheet split.
 """
 
 import os, sys, io, time, calendar, requests
@@ -41,7 +46,135 @@ st.set_page_config(
 # ─────────────────────────────────────────────────────────────────────────────
 SALES_REPORT_ID  = st.secrets.get("SALES_REPORT_ID",  "00OPg00000BSGzZ")
 TERMS_REPORT_ID  = st.secrets.get("TERMS_REPORT_ID",  "00OPg00000BSH7d")
-_DEFAULT_SF_URL  = st.secrets.get("SF_INSTANCE_URL",  "")
+
+# ── Org-chart hierarchy — hardcoded from "2026 US SMB Sales Org Chart.xlsx" ──
+# LEADER_META  : leader name  →  {team, region}
+# ORG_HIERARCHY: rep name     →  {team, leader}
+# Used as the primary source for Team / Leader filter columns in master_df.
+# CSEs Salesforce report is still used as a fallback for reps not listed here.
+LEADER_META = {
+    "Angie Koplan"    : {"team": "US SMB Client Sales Premier",  "region": "Premier West"},
+    "Chris Smith"     : {"team": "US SMB Client Sales Premier",  "region": "Premier North"},
+    "Kyle Loving"     : {"team": "US SMB Client Sales Premier",  "region": "Premier East"},
+    "Brooke Nelson"   : {"team": "US SMB Client Sales Premier",  "region": "Premier South"},
+    "Megan Frodge"    : {"team": "US SMB Client Sales Strategic", "region": "Strategic Northeast"},
+    "Blake Karnes"    : {"team": "US SMB Client Sales Strategic", "region": "Strategic Northwest"},
+    "Amanda Meek"     : {"team": "US SMB Client Sales Strategic", "region": "Strategic Mountain"},
+    "Samantha Young"  : {"team": "US SMB Client Sales Strategic", "region": "Strategic Southeast"},
+    "Dave Elinger"    : {"team": "US SMB Client Sales Strategic", "region": "Strategic Southwest"},
+    "Christian Larson": {"team": "US SMB Client Sales Strategic", "region": "Strategic Midwest"},
+    "Heather Lewis"   : {"team": "US SMB Client Sales Key",       "region": "Key West"},
+    "Ronit Cohn"      : {"team": "US SMB Client Sales Key",       "region": "Key North"},
+    "Jake Rutenbar"   : {"team": "US SMB Client Sales Key",       "region": "Key Mid Atlantic"},
+    "Randi Kruger"    : {"team": "US SMB Client Sales Key",       "region": "Key South"},
+    "Marissa Mock"    : {"team": "US SMB Client Sales Key",       "region": "Key Great Lakes"},
+}
+
+# Pre-build a lowercase-keyed lookup for fast, case-insensitive rep matching.
+_ORG_LOOKUP = {}
+_RAW_ORG = {
+    "Danny Lewis":              {"team": "US SMB Client Sales Premier",  "leader": "Angie Koplan"},
+    "Jon Salmon":               {"team": "US SMB Client Sales Premier",  "leader": "Angie Koplan"},
+    "Katie Byrnes":             {"team": "US SMB Client Sales Premier",  "leader": "Angie Koplan"},
+    "Julie Barter":             {"team": "US SMB Client Sales Premier",  "leader": "Angie Koplan"},
+    "Sam Angelo":               {"team": "US SMB Client Sales Premier",  "leader": "Angie Koplan"},
+    "Alex Capeloto":            {"team": "US SMB Client Sales Premier",  "leader": "Angie Koplan"},
+    "Adam Sala":                {"team": "US SMB Client Sales Premier",  "leader": "Angie Koplan"},
+    "Kim Koehn":                {"team": "US SMB Client Sales Premier",  "leader": "Chris Smith"},
+    "Deb Tegan":                {"team": "US SMB Client Sales Premier",  "leader": "Chris Smith"},
+    "Ashiey McCue":             {"team": "US SMB Client Sales Premier",  "leader": "Chris Smith"},
+    "Mandy Gallaner":           {"team": "US SMB Client Sales Premier",  "leader": "Chris Smith"},
+    "Katrina Brock":            {"team": "US SMB Client Sales Premier",  "leader": "Chris Smith"},
+    "Ben Goman":                {"team": "US SMB Client Sales Premier",  "leader": "Chris Smith"},
+    "Steve Snediker":           {"team": "US SMB Client Sales Premier",  "leader": "Chris Smith"},
+    "Deb Smith":                {"team": "US SMB Client Sales Premier",  "leader": "Kyle Loving"},
+    "Ellen Bastian":            {"team": "US SMB Client Sales Premier",  "leader": "Kyle Loving"},
+    "Natalie Jamieson":         {"team": "US SMB Client Sales Premier",  "leader": "Kyle Loving"},
+    "Rob Meek":                 {"team": "US SMB Client Sales Premier",  "leader": "Kyle Loving"},
+    "Breck Hansen":             {"team": "US SMB Client Sales Premier",  "leader": "Kyle Loving"},
+    "Aghiles Benali":           {"team": "US SMB Client Sales Premier",  "leader": "Kyle Loving"},
+    "Blair Sievert":            {"team": "US SMB Client Sales Premier",  "leader": "Kyle Loving"},
+    "Alanna Parrott":           {"team": "US SMB Client Sales Premier",  "leader": "Brooke Nelson"},
+    "Meaghan Rodgers":          {"team": "US SMB Client Sales Premier",  "leader": "Brooke Nelson"},
+    "Robert Stoering":          {"team": "US SMB Client Sales Premier",  "leader": "Brooke Nelson"},
+    "Michael Landes":           {"team": "US SMB Client Sales Premier",  "leader": "Brooke Nelson"},
+    "Amy Lawrence":             {"team": "US SMB Client Sales Premier",  "leader": "Brooke Nelson"},
+    "Lindsay Wilson":           {"team": "US SMB Client Sales Premier",  "leader": "Brooke Nelson"},
+    "Jun Park":                 {"team": "US SMB Client Sales Strategic", "leader": "Megan Frodge"},
+    "Emily Norris":             {"team": "US SMB Client Sales Strategic", "leader": "Megan Frodge"},
+    "Lindsay Paxton":           {"team": "US SMB Client Sales Strategic", "leader": "Megan Frodge"},
+    "Jessica Klein":            {"team": "US SMB Client Sales Strategic", "leader": "Megan Frodge"},
+    "Matt Knight":              {"team": "US SMB Client Sales Strategic", "leader": "Megan Frodge"},
+    "Jill Desjardine":          {"team": "US SMB Client Sales Strategic", "leader": "Megan Frodge"},
+    "Evan Smith":               {"team": "US SMB Client Sales Strategic", "leader": "Megan Frodge"},
+    "Mike Monello":             {"team": "US SMB Client Sales Strategic", "leader": "Blake Karnes"},
+    "Mark Workman":             {"team": "US SMB Client Sales Strategic", "leader": "Blake Karnes"},
+    "Debbie Saysanavanophet":   {"team": "US SMB Client Sales Strategic", "leader": "Blake Karnes"},
+    "Evan Anderson":            {"team": "US SMB Client Sales Strategic", "leader": "Blake Karnes"},
+    "Britt Whims":              {"team": "US SMB Client Sales Strategic", "leader": "Blake Karnes"},
+    "Kaitlin Dailey":           {"team": "US SMB Client Sales Strategic", "leader": "Blake Karnes"},
+    "Jamie Stewart":            {"team": "US SMB Client Sales Strategic", "leader": "Blake Karnes"},
+    "Tom Wahl":                 {"team": "US SMB Client Sales Strategic", "leader": "Amanda Meek"},
+    "Kevin Chheang":            {"team": "US SMB Client Sales Strategic", "leader": "Amanda Meek"},
+    "Joe Dorey":                {"team": "US SMB Client Sales Strategic", "leader": "Amanda Meek"},
+    "Andrea Flor":              {"team": "US SMB Client Sales Strategic", "leader": "Amanda Meek"},
+    "Mara Obermeier":           {"team": "US SMB Client Sales Strategic", "leader": "Amanda Meek"},
+    "Ty Sataaf":                {"team": "US SMB Client Sales Strategic", "leader": "Amanda Meek"},
+    "Nate Heussner":            {"team": "US SMB Client Sales Strategic", "leader": "Samantha Young"},
+    "Joe Silva":                {"team": "US SMB Client Sales Strategic", "leader": "Samantha Young"},
+    "Tyler Nuquay":             {"team": "US SMB Client Sales Strategic", "leader": "Samantha Young"},
+    "Trevor Hecht":             {"team": "US SMB Client Sales Strategic", "leader": "Samantha Young"},
+    "Kylie Barrett":            {"team": "US SMB Client Sales Strategic", "leader": "Samantha Young"},
+    "Jordan Buri":              {"team": "US SMB Client Sales Strategic", "leader": "Samantha Young"},
+    "Tyler Hazen":              {"team": "US SMB Client Sales Strategic", "leader": "Samantha Young"},
+    "Lauren Pellowski":         {"team": "US SMB Client Sales Strategic", "leader": "Dave Elinger"},
+    "Sam O'Connell":            {"team": "US SMB Client Sales Strategic", "leader": "Dave Elinger"},
+    "Aaron Korus":              {"team": "US SMB Client Sales Strategic", "leader": "Dave Elinger"},
+    "Colin Kraker":             {"team": "US SMB Client Sales Strategic", "leader": "Dave Elinger"},
+    "Joseph Zangel":            {"team": "US SMB Client Sales Strategic", "leader": "Dave Elinger"},
+    "Nicole Brightenstein":     {"team": "US SMB Client Sales Strategic", "leader": "Dave Elinger"},
+    "Zack Scharf":              {"team": "US SMB Client Sales Strategic", "leader": "Dave Elinger"},
+    "Tom Osterberg":            {"team": "US SMB Client Sales Strategic", "leader": "Christian Larson"},
+    "Anna Christofaro":         {"team": "US SMB Client Sales Strategic", "leader": "Christian Larson"},
+    "Joel Segall":              {"team": "US SMB Client Sales Strategic", "leader": "Christian Larson"},
+    "Dan Eagen":                {"team": "US SMB Client Sales Strategic", "leader": "Christian Larson"},
+    "Rachel Burns":             {"team": "US SMB Client Sales Strategic", "leader": "Christian Larson"},
+    "Laura Jungbauer":          {"team": "US SMB Client Sales Strategic", "leader": "Christian Larson"},
+    "Jeff Danner":              {"team": "US SMB Client Sales Strategic", "leader": "Christian Larson"},
+    "Tyler Klein":              {"team": "US SMB Client Sales Key",       "leader": "Heather Lewis"},
+    "Michaela Gormley":         {"team": "US SMB Client Sales Key",       "leader": "Heather Lewis"},
+    "Oliver Holdenson":         {"team": "US SMB Client Sales Key",       "leader": "Heather Lewis"},
+    "Joe Vigil":                {"team": "US SMB Client Sales Key",       "leader": "Heather Lewis"},
+    "Austin Aghamirzai":        {"team": "US SMB Client Sales Key",       "leader": "Heather Lewis"},
+    "Joe Bellefeuille":         {"team": "US SMB Client Sales Key",       "leader": "Heather Lewis"},
+    "Mark Hemmerle":            {"team": "US SMB Client Sales Key",       "leader": "Heather Lewis"},
+    "Natalie Rizk":             {"team": "US SMB Client Sales Key",       "leader": "Ronit Cohn"},
+    "Ryan Doyle":               {"team": "US SMB Client Sales Key",       "leader": "Ronit Cohn"},
+    "Alden Martinez":           {"team": "US SMB Client Sales Key",       "leader": "Ronit Cohn"},
+    "Teylen Sheesley":          {"team": "US SMB Client Sales Key",       "leader": "Ronit Cohn"},
+    "Jonathan Barth":           {"team": "US SMB Client Sales Key",       "leader": "Ronit Cohn"},
+    "Brooke Mullis":            {"team": "US SMB Client Sales Key",       "leader": "Ronit Cohn"},
+    "Mike Antkowiak":           {"team": "US SMB Client Sales Key",       "leader": "Ronit Cohn"},
+    "Mckenzie Bowen":           {"team": "US SMB Client Sales Key",       "leader": "Jake Rutenbar"},
+    "Karrah Manzanarez":        {"team": "US SMB Client Sales Key",       "leader": "Jake Rutenbar"},
+    "Thang Nguyen":             {"team": "US SMB Client Sales Key",       "leader": "Jake Rutenbar"},
+    "Danny Sinatro":            {"team": "US SMB Client Sales Key",       "leader": "Jake Rutenbar"},
+    "Kelsey Fredrickson":       {"team": "US SMB Client Sales Key",       "leader": "Jake Rutenbar"},
+    "Ben Angelo":               {"team": "US SMB Client Sales Key",       "leader": "Jake Rutenbar"},
+    "Tyler Sanford":            {"team": "US SMB Client Sales Key",       "leader": "Randi Kruger"},
+    "Rachel Meyer":             {"team": "US SMB Client Sales Key",       "leader": "Randi Kruger"},
+    "Scott Bere":               {"team": "US SMB Client Sales Key",       "leader": "Randi Kruger"},
+    "Tom Larson":               {"team": "US SMB Client Sales Key",       "leader": "Randi Kruger"},
+    "David Jensen":             {"team": "US SMB Client Sales Key",       "leader": "Randi Kruger"},
+    "Jack Zabel":               {"team": "US SMB Client Sales Key",       "leader": "Randi Kruger"},
+    "Chris Spencer":            {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},
+    "Bri Basolo":               {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},
+    "Tyler Krob":               {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},
+    "Libby Hartnagel":          {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},
+    "Jake Nickoloff":           {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},
+    "Anders Halvorson":         {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},
+}
+_ORG_LOOKUP = {k.lower(): v for k, v in _RAW_ORG.items()}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Styles
@@ -116,16 +249,36 @@ def _hdr(session_id: str) -> dict:
     return {"Authorization": f"Bearer {session_id}", "Content-Type": "application/json"}
 
 
-def sf_verify(instance_url: str, session_id: str):
-    """Ping the userinfo endpoint. Returns (ok: bool, info: dict)."""
-    try:
-        r = requests.get(
-            f"{instance_url}/services/oauth2/userinfo",
-            headers=_hdr(session_id), timeout=10,
-        )
-        return (True, r.json()) if r.status_code == 200 else (False, {})
-    except Exception:
-        return False, {}
+def detect_instance_url(session_id: str):
+    """
+    Auto-detect the Salesforce instance URL from a session ID alone.
+
+    Calls the standard OAuth2 userinfo endpoint at login.salesforce.com (and
+    test.salesforce.com as a fallback for sandboxes).  Salesforce returns the
+    org's REST base URL in the response regardless of whether the org uses a
+    custom domain, so the correct instance URL is always recovered.
+
+    Returns (ok: bool, instance_url: str, info: dict).
+    """
+    from urllib.parse import urlparse
+    for base in ("https://login.salesforce.com", "https://test.salesforce.com"):
+        try:
+            r = requests.get(
+                f"{base}/services/oauth2/userinfo",
+                headers=_hdr(session_id),
+                timeout=10,
+                allow_redirects=True,
+            )
+            if r.status_code == 200:
+                info = r.json()
+                # urls.rest is "https://<instance>/services/data/" — parse the origin
+                rest = info.get("urls", {}).get("rest", "")
+                if rest:
+                    p = urlparse(rest)
+                    return True, f"{p.scheme}://{p.netloc}", info
+        except Exception:
+            pass
+    return False, "", {}
 
 
 def search_reports(instance_url: str, session_id: str, term: str) -> list:
@@ -474,28 +627,52 @@ def prep_cses(df: pd.DataFrame) -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_master_df(active: list, cses_df: pd.DataFrame = None) -> pd.DataFrame:
-    lookup = {}
+    # Build CSEs fallback lookup (rep name → team / manager from Salesforce CSEs report)
+    cses_lookup = {}
     if cses_df is not None:
         for _, row in cses_df.iterrows():
-            lookup[row["owner_name"]] = {
-                "Team":    row.get("team", ""),
-                "Manager": row.get("manager_name", "Unassigned"),
+            cses_lookup[row["owner_name"].strip().lower()] = {
+                "Team":   row.get("team", ""),
+                "Leader": row.get("manager_name", "Unassigned"),
+                "Region": "",
             }
 
     rows = []
     for r in active:
-        info = lookup.get(r["account_owner"], {"Team": "", "Manager": "Unassigned"})
+        rep       = (r["account_owner"] or "").strip()
+        rep_lower = rep.lower()
+
+        # Primary: org-chart lookup (case-insensitive exact match on cleaned name)
+        org = _ORG_LOOKUP.get(rep_lower)
+        if org:
+            team   = org["team"]
+            leader = org["leader"]
+            region = LEADER_META.get(leader, {}).get("region", "")
+        else:
+            # Fallback: CSEs Salesforce report
+            fb     = cses_lookup.get(rep_lower, {})
+            team   = fb.get("Team",   "")
+            leader = fb.get("Leader", "Unassigned")
+            region = fb.get("Region", "")
+
         base = {
-            "Team":         info["Team"],
-            "Manager":      info["Manager"],
-            "Rep":          r["account_owner"],
+            "Team":         team,
+            "Leader":       leader,
+            "Region":       region,
+            "Rep":          rep,
             "Account Name": r["account_name"],
             "Account ID":   r["account_id"],
         }
         for n, d in enumerate(r["deficits"], 1):
             base[f"Deficit {n} Amount"]         = -round(d["amount"], 2)
-            base[f"Deficit {n} Effective Date"] = d["eff_date"].date()
-            base[f"Deficit {n} Clears/Expires"] = d["clear_date"].date()
+            base[f"Deficit {n} Effective Date"] = (
+                d["eff_date"].date()
+                if hasattr(d["eff_date"], "date") else d["eff_date"]
+            )
+            base[f"Deficit {n} Clears/Expires"] = (
+                d["clear_date"].date()
+                if hasattr(d["clear_date"], "date") else d["clear_date"]
+            )
             base[f"Deficit {n} Source"]         = d["source"]
         rows.append(base)
 
@@ -503,9 +680,7 @@ def build_master_df(active: list, cses_df: pd.DataFrame = None) -> pd.DataFrame:
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
-    sort_cols = (["Team", "Manager", "Rep", "Account Name"] if cses_df is not None
-                 else ["Rep", "Account Name"])
-    return df.sort_values(sort_cols).reset_index(drop=True)
+    return df.sort_values(["Team", "Leader", "Rep", "Account Name"]).reset_index(drop=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -528,12 +703,6 @@ def excel_bytes(results: list, cses_df=None) -> bytes:
 with st.sidebar:
     st.markdown("### Salesforce Connection")
 
-    instance_url = st.text_input(
-        "Instance URL",
-        value=_DEFAULT_SF_URL,
-        placeholder="https://myorg.my.salesforce.com",
-        key="sf_url",
-    )
     session_id = st.text_input(
         "Session ID",
         type="password",
@@ -542,28 +711,31 @@ with st.sidebar:
     )
 
     if st.button("Connect", use_container_width=True):
-        if not instance_url or not session_id:
-            st.error("Both fields are required.")
+        if not session_id.strip():
+            st.error("Session ID is required.")
         else:
-            with st.spinner("Verifying session…"):
-                ok, info = sf_verify(instance_url.rstrip("/"), session_id)
+            with st.spinner("Detecting instance and verifying session…"):
+                ok, instance_url, info = detect_instance_url(session_id.strip())
             if ok:
                 st.session_state.update({
                     "connected":   True,
-                    "sf_instance": instance_url.rstrip("/"),
-                    "sf_token":    session_id,
+                    "sf_instance": instance_url,
+                    "sf_token":    session_id.strip(),
                 })
                 name = info.get("name") or info.get("preferred_username", "")
                 st.success(f"Connected{' — ' + name if name else ''}")
             else:
                 st.session_state["connected"] = False
-                st.error("Connection failed. Check URL and Session ID.")
+                st.error("Connection failed. Check your Session ID.")
 
     # ── CSEs + Run ───────────────────────────────────────────────────────────
     if st.session_state.get("connected"):
         st.markdown("---")
         st.markdown("### Optional: CSEs Report")
-        st.caption("Enables Team and Manager filters. Search by report name to select.")
+        st.caption(
+            "Enables team-sheet grouping in the Excel download. "
+            "Team and Leader filters always work via the built-in org chart."
+        )
 
         def report_picker(label: str, search_key: str, select_key: str):
             """Search-then-select widget for a Salesforce report. Returns report ID or None."""
@@ -634,6 +806,7 @@ if not st.session_state.get("connected"):
 The session ID may appear in the page URL after `sid=`.
 
 The session ID expires when you log out or after your org's session timeout (typically 8 hours).
+The instance URL is detected automatically — no need to enter it manually.
         """)
     st.stop()
 
@@ -790,81 +963,71 @@ master_df = st.session_state["master_df"]
 results   = st.session_state["results"]
 cses_df   = st.session_state["cses_df"]
 run_date  = st.session_state["run_date"]
-has_cses  = cses_df is not None and not master_df.empty and "Team" in master_df.columns
+has_cses  = cses_df is not None   # used for Excel team-sheet split via write_excel
+has_org   = not master_df.empty and "Leader" in master_df.columns
 
 
 # ── Filters ──────────────────────────────────────────────────────────────────
 st.markdown('<div class="filter-wrap">', unsafe_allow_html=True)
 
-if has_cses:
-    # ── Three-level cascade: Account Owner Team → Region/Manager → Account Owner ──
-    fc = st.columns([1, 1, 1, 1.6, 0.5])
+# Three-level cascade: Team → Leader → Account Owner
+# Leader column is always populated from the hardcoded org chart (no CSEs needed).
+fc = st.columns([1, 1, 1, 1.6, 0.5])
 
-    # Level 1 — Team
-    all_teams = sorted(master_df["Team"].dropna().unique())
-    sel_teams = fc[0].multiselect(
-        "Account Owner Team",
-        all_teams,
-        placeholder="All teams",
-        key="f_team",
-    )
+# Level 1 — Team
+all_teams = sorted(master_df["Team"].dropna().unique()) if has_org else []
+sel_teams = fc[0].multiselect(
+    "Account Owner Team",
+    all_teams,
+    placeholder="All teams",
+    key="f_team",
+)
 
-    # Level 2 — Region/Manager (cascades from team)
-    mgr_pool     = (master_df[master_df["Team"].isin(sel_teams)]["Manager"]
-                    if sel_teams else master_df["Manager"])
-    all_managers = sorted(mgr_pool.dropna().unique())
-    sel_managers = fc[1].multiselect(
-        "Region / Manager",
-        all_managers,
-        placeholder="All managers",
-        key="f_mgr",
-    )
-
-    # Level 3 — Account Owner (cascades from manager, then team, then all)
-    if sel_managers:
-        rep_pool = master_df[master_df["Manager"].isin(sel_managers)]["Rep"]
-    elif sel_teams:
-        rep_pool = master_df[master_df["Team"].isin(sel_teams)]["Rep"]
-    else:
-        rep_pool = master_df["Rep"]
-    all_reps = sorted(rep_pool.dropna().unique())
-    sel_reps = fc[2].multiselect(
-        "Account Owner",
-        all_reps,
-        placeholder="All reps",
-        key="f_rep",
-    )
-
-    search = fc[3].text_input(
-        "Search account name", placeholder="Type to search…", key="f_search"
-    )
-    if fc[4].button("Clear", use_container_width=True, key="f_clear"):
-        for k in ["f_team", "f_mgr", "f_rep", "f_search"]:
-            st.session_state.pop(k, None)
-        st.rerun()
-
+# Level 2 — Leader (cascades from team; shown as "Name (Region)")
+if has_org:
+    ldr_pool_df = master_df[master_df["Team"].isin(sel_teams)] if sel_teams else master_df
+    # Build display label: "Angie Koplan (Premier West)"
+    leader_display: dict[str, str] = {}
+    for ldr in ldr_pool_df["Leader"].dropna().unique():
+        region_vals = ldr_pool_df[ldr_pool_df["Leader"] == ldr]["Region"].dropna()
+        region_str  = region_vals.iloc[0] if not region_vals.empty else ""
+        leader_display[ldr] = f"{ldr} ({region_str})" if region_str else ldr
+    all_leaders_display = sorted(leader_display.values())
+    display_to_leader   = {v: k for k, v in leader_display.items()}
 else:
-    # No CSEs report — only Account Owner + search, with a note about Team/Manager
-    fc       = st.columns([1.2, 2, 0.5])
-    all_reps = sorted(master_df["Rep"].dropna().unique()) if not master_df.empty else []
-    sel_teams, sel_managers = [], []
-    sel_reps = fc[0].multiselect(
-        "Account Owner",
-        all_reps,
-        placeholder="All reps",
-        key="f_rep",
-    )
-    search   = fc[1].text_input(
-        "Search account name", placeholder="Type to search…", key="f_search"
-    )
-    if fc[2].button("Clear", use_container_width=True, key="f_clear"):
-        for k in ["f_rep", "f_search"]:
-            st.session_state.pop(k, None)
-        st.rerun()
-    st.caption(
-        "Team and Region / Manager filters are available when a CSEs report is loaded "
-        "(optional — configure it in the sidebar)."
-    )
+    all_leaders_display = []
+    display_to_leader   = {}
+
+sel_leaders_display = fc[1].multiselect(
+    "Leader",
+    all_leaders_display,
+    placeholder="All leaders",
+    key="f_leader",
+)
+sel_leaders = [display_to_leader.get(d, d) for d in sel_leaders_display]
+
+# Level 3 — Account Owner (cascades from leader, then team, then all)
+if sel_leaders:
+    rep_pool = master_df[master_df["Leader"].isin(sel_leaders)]["Rep"]
+elif sel_teams:
+    rep_pool = master_df[master_df["Team"].isin(sel_teams)]["Rep"]
+else:
+    rep_pool = master_df["Rep"] if not master_df.empty else pd.Series([], dtype=str)
+all_reps = sorted(rep_pool.dropna().unique())
+sel_reps = fc[2].multiselect(
+    "Account Owner",
+    all_reps,
+    placeholder="All reps",
+    key="f_rep",
+)
+
+search = fc[3].text_input(
+    "Search account name", placeholder="Type to search…", key="f_search"
+)
+if fc[4].button("Clear", use_container_width=True, key="f_clear"):
+    for k in ["f_team", "f_leader", "f_rep", "f_search"]:
+        st.session_state.pop(k, None)
+    st.rerun()
 
 st.markdown('</div>', unsafe_allow_html=True)
 
@@ -872,8 +1035,8 @@ st.markdown('</div>', unsafe_allow_html=True)
 filtered = master_df.copy()
 if sel_teams:
     filtered = filtered[filtered["Team"].isin(sel_teams)]
-if sel_managers:
-    filtered = filtered[filtered["Manager"].isin(sel_managers)]
+if sel_leaders:
+    filtered = filtered[filtered["Leader"].isin(sel_leaders)]
 if sel_reps:
     filtered = filtered[filtered["Rep"].isin(sel_reps)]
 if search:
@@ -927,10 +1090,10 @@ else:
                 pass
     max_deficit_n = max(populated_ns) if populated_ns else 0
 
-    # Identity (non-deficit) columns — hide Team/Manager when no CSEs data
+    # Identity (non-deficit) columns — Team / Leader always shown when present
     identity_cols = [
-        c for c in ["Team", "Manager", "Rep", "Account Name", "Account ID"]
-        if c in filtered.columns and (has_cses or c not in ("Team", "Manager"))
+        c for c in ["Team", "Leader", "Rep", "Account Name", "Account ID"]
+        if c in filtered.columns
     ]
     # Deficit group columns in order, capped at max_deficit_n
     deficit_group_order = ("Amount", "Effective Date", "Clears/Expires", "Source")
@@ -945,9 +1108,8 @@ else:
 
     # ── Column config ─────────────────────────────────────────────────────────
     col_cfg = {}
-    if has_cses:
-        col_cfg["Team"]    = st.column_config.TextColumn("Team",    width="small")
-        col_cfg["Manager"] = st.column_config.TextColumn("Manager", width="medium")
+    col_cfg["Team"]         = st.column_config.TextColumn("Team",         width="small")
+    col_cfg["Leader"]       = st.column_config.TextColumn("Leader",       width="medium")
     col_cfg["Rep"]          = st.column_config.TextColumn("Rep",          width="medium")
     col_cfg["Account Name"] = st.column_config.TextColumn("Account Name", width="large")
     col_cfg["Account ID"]   = st.column_config.TextColumn("Account ID",   width="medium")
