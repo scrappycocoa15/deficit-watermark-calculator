@@ -53,6 +53,11 @@ TERMS_REPORT_ID  = st.secrets.get("TERMS_REPORT_ID",  "00OPg00000BSH7d")
 # Used as the primary source for Team / Leader filter columns in master_df.
 # CSEs Salesforce report is still used as a fallback for reps not listed here.
 LEADER_META = {
+    # VPs — shown as Leader when an RSD owns an account directly
+    "Jason Rainey"    : {"team": "US SMB Client Sales Premier",  "region": "Premier"},
+    "Andrew Hop"      : {"team": "US SMB Client Sales Strategic", "region": "Strategic"},
+    "Peter Gadd"      : {"team": "US SMB Client Sales Key",       "region": "Key"},
+    # RSDs — shown as Leader for their reps' accounts
     "Angie Koplan"    : {"team": "US SMB Client Sales Premier",  "region": "Premier West"},
     "Chris Smith"     : {"team": "US SMB Client Sales Premier",  "region": "Premier North"},
     "Kyle Loving"     : {"team": "US SMB Client Sales Premier",  "region": "Premier East"},
@@ -201,6 +206,29 @@ _RAW_ORG = {
     "Thomas Wahl":              {"team": "US SMB Client Sales Strategic", "leader": "Amanda Meek"},       # org: Tom
     "Thomas Osterberg":         {"team": "US SMB Client Sales Strategic", "leader": "Christian Larson"},  # org: Tom
     "Thomas Larson":            {"team": "US SMB Client Sales Key",       "leader": "Randi Kruger"},      # org: Tom
+
+    # ── RSDs as account owners — their leader is their VP ────────────────────
+    "Angie Koplan":             {"team": "US SMB Client Sales Premier",  "leader": "Jason Rainey"},
+    "Chris Smith":              {"team": "US SMB Client Sales Premier",  "leader": "Jason Rainey"},
+    "Kyle Loving":              {"team": "US SMB Client Sales Premier",  "leader": "Jason Rainey"},
+    "Brooke Nelson":            {"team": "US SMB Client Sales Premier",  "leader": "Jason Rainey"},
+    "Megan Frodge":             {"team": "US SMB Client Sales Strategic", "leader": "Andrew Hop"},
+    "Blake Karnes":             {"team": "US SMB Client Sales Strategic", "leader": "Andrew Hop"},
+    "Amanda Meek":              {"team": "US SMB Client Sales Strategic", "leader": "Andrew Hop"},
+    "Samantha Young":           {"team": "US SMB Client Sales Strategic", "leader": "Andrew Hop"},
+    "Dave Elinger":             {"team": "US SMB Client Sales Strategic", "leader": "Andrew Hop"},
+    "Christian Larson":         {"team": "US SMB Client Sales Strategic", "leader": "Andrew Hop"},
+    "Heather Lewis":            {"team": "US SMB Client Sales Key",       "leader": "Peter Gadd"},
+    "Ronit Cohn":               {"team": "US SMB Client Sales Key",       "leader": "Peter Gadd"},
+    "Jake Rutenbar":            {"team": "US SMB Client Sales Key",       "leader": "Peter Gadd"},
+    "Randi Kruger":             {"team": "US SMB Client Sales Key",       "leader": "Peter Gadd"},
+    "Marissa Mock":             {"team": "US SMB Client Sales Key",       "leader": "Peter Gadd"},
+
+    # ── Additional Salesforce spelling aliases (confirmed Sep 2026) ───────────
+    "Nicole Breitenstein":      {"team": "US SMB Client Sales Strategic", "leader": "Dave Elinger"},     # org: Brightenstein
+    "Stephen Snediker":         {"team": "US SMB Client Sales Premier",  "leader": "Chris Smith"},       # org: Steve
+    "Ty Saathoff":              {"team": "US SMB Client Sales Strategic", "leader": "Amanda Meek"},      # org: Sataaf
+    "Samantha O'Connell":       {"team": "US SMB Client Sales Strategic", "leader": "Dave Elinger"},     # org: Sam
 }
 _ORG_LOOKUP = {k.lower(): v for k, v in _RAW_ORG.items()}
 
