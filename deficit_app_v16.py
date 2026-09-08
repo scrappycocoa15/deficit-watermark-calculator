@@ -173,6 +173,34 @@ _RAW_ORG = {
     "Libby Hartnagel":          {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},
     "Jake Nickoloff":           {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},
     "Anders Halvorson":         {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},
+
+    # ── Salesforce full-name / spelling aliases ───────────────────────────────
+    # Salesforce stores legal names; the org chart uses nicknames or has minor
+    # spelling differences.  Both forms are kept so either will match.
+    # Confirmed from live data (Sep 2026):
+    "Ashley McCue":             {"team": "US SMB Client Sales Premier",  "leader": "Chris Smith"},       # org: Ashiey (typo)
+    "Anders Halvorsen":         {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},      # org: Halvorson
+    "Brianna Basolo":           {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},      # org: Bri
+    "Brittany Whims":           {"team": "US SMB Client Sales Strategic", "leader": "Blake Karnes"},      # org: Britt
+    "Christopher Spencer":      {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},      # org: Chris
+    "Debbie Saysanavongphet":   {"team": "US SMB Client Sales Strategic", "leader": "Blake Karnes"},      # org: Saysanavanophet
+    "Jacob Nickoloff":          {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},      # org: Jake
+    "Jeffrey Danner":           {"team": "US SMB Client Sales Strategic", "leader": "Christian Larson"},  # org: Jeff
+    "Joseph Silva":             {"team": "US SMB Client Sales Strategic", "leader": "Samantha Young"},    # org: Joe
+    "Mackenzie Bowen":          {"team": "US SMB Client Sales Key",       "leader": "Jake Rutenbar"},     # org: Mckenzie
+    "Mandy Gallanar":           {"team": "US SMB Client Sales Premier",  "leader": "Chris Smith"},        # org: Gallaner
+    "Michael Monello":          {"team": "US SMB Client Sales Strategic", "leader": "Blake Karnes"},      # org: Mike
+    "Nathaniel Heussner":       {"team": "US SMB Client Sales Strategic", "leader": "Samantha Young"},    # org: Nate
+    # Proactive aliases — same nickname patterns, not yet confirmed but low risk:
+    "Jonathan Salmon":          {"team": "US SMB Client Sales Premier",  "leader": "Angie Koplan"},       # org: Jon
+    "Robert Meek":              {"team": "US SMB Client Sales Premier",  "leader": "Kyle Loving"},        # org: Rob
+    "Joseph Dorey":             {"team": "US SMB Client Sales Strategic", "leader": "Amanda Meek"},       # org: Joe
+    "Joseph Vigil":             {"team": "US SMB Client Sales Key",       "leader": "Heather Lewis"},     # org: Joe
+    "Joseph Bellefeuille":      {"team": "US SMB Client Sales Key",       "leader": "Heather Lewis"},     # org: Joe
+    "Daniel Eagen":             {"team": "US SMB Client Sales Strategic", "leader": "Christian Larson"},  # org: Dan
+    "Thomas Wahl":              {"team": "US SMB Client Sales Strategic", "leader": "Amanda Meek"},       # org: Tom
+    "Thomas Osterberg":         {"team": "US SMB Client Sales Strategic", "leader": "Christian Larson"},  # org: Tom
+    "Thomas Larson":            {"team": "US SMB Client Sales Key",       "leader": "Randi Kruger"},      # org: Tom
 }
 _ORG_LOOKUP = {k.lower(): v for k, v in _RAW_ORG.items()}
 
