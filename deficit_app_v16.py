@@ -46,6 +46,7 @@ st.set_page_config(
 # ─────────────────────────────────────────────────────────────────────────────
 SALES_REPORT_ID  = st.secrets.get("SALES_REPORT_ID",  "00OPg00000BSGzZ")
 TERMS_REPORT_ID  = st.secrets.get("TERMS_REPORT_ID",  "00OPg00000BSH7d")
+_DEFAULT_SF_URL  = st.secrets.get("SF_INSTANCE_URL",  "")
 
 # ── Org-chart hierarchy — hardcoded from "2026 US SMB Sales Org Chart.xlsx" ──
 # LEADER_META  : leader name  →  {team, region}
@@ -173,34 +174,6 @@ _RAW_ORG = {
     "Libby Hartnagel":          {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},
     "Jake Nickoloff":           {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},
     "Anders Halvorson":         {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},
-
-    # ── Salesforce full-name / spelling aliases ───────────────────────────────
-    # Salesforce stores legal names; the org chart uses nicknames or has minor
-    # spelling differences.  Both forms are kept so either will match.
-    # Confirmed from live data (Sep 2026):
-    "Ashley McCue":             {"team": "US SMB Client Sales Premier",  "leader": "Chris Smith"},       # org: Ashiey (typo)
-    "Anders Halvorsen":         {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},      # org: Halvorson
-    "Brianna Basolo":           {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},      # org: Bri
-    "Brittany Whims":           {"team": "US SMB Client Sales Strategic", "leader": "Blake Karnes"},      # org: Britt
-    "Christopher Spencer":      {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},      # org: Chris
-    "Debbie Saysanavongphet":   {"team": "US SMB Client Sales Strategic", "leader": "Blake Karnes"},      # org: Saysanavanophet
-    "Jacob Nickoloff":          {"team": "US SMB Client Sales Key",       "leader": "Marissa Mock"},      # org: Jake
-    "Jeffrey Danner":           {"team": "US SMB Client Sales Strategic", "leader": "Christian Larson"},  # org: Jeff
-    "Joseph Silva":             {"team": "US SMB Client Sales Strategic", "leader": "Samantha Young"},    # org: Joe
-    "Mackenzie Bowen":          {"team": "US SMB Client Sales Key",       "leader": "Jake Rutenbar"},     # org: Mckenzie
-    "Mandy Gallanar":           {"team": "US SMB Client Sales Premier",  "leader": "Chris Smith"},        # org: Gallaner
-    "Michael Monello":          {"team": "US SMB Client Sales Strategic", "leader": "Blake Karnes"},      # org: Mike
-    "Nathaniel Heussner":       {"team": "US SMB Client Sales Strategic", "leader": "Samantha Young"},    # org: Nate
-    # Proactive aliases — same nickname patterns, not yet confirmed but low risk:
-    "Jonathan Salmon":          {"team": "US SMB Client Sales Premier",  "leader": "Angie Koplan"},       # org: Jon
-    "Robert Meek":              {"team": "US SMB Client Sales Premier",  "leader": "Kyle Loving"},        # org: Rob
-    "Joseph Dorey":             {"team": "US SMB Client Sales Strategic", "leader": "Amanda Meek"},       # org: Joe
-    "Joseph Vigil":             {"team": "US SMB Client Sales Key",       "leader": "Heather Lewis"},     # org: Joe
-    "Joseph Bellefeuille":      {"team": "US SMB Client Sales Key",       "leader": "Heather Lewis"},     # org: Joe
-    "Daniel Eagen":             {"team": "US SMB Client Sales Strategic", "leader": "Christian Larson"},  # org: Dan
-    "Thomas Wahl":              {"team": "US SMB Client Sales Strategic", "leader": "Amanda Meek"},       # org: Tom
-    "Thomas Osterberg":         {"team": "US SMB Client Sales Strategic", "leader": "Christian Larson"},  # org: Tom
-    "Thomas Larson":            {"team": "US SMB Client Sales Key",       "leader": "Randi Kruger"},      # org: Tom
 }
 _ORG_LOOKUP = {k.lower(): v for k, v in _RAW_ORG.items()}
 
@@ -277,36 +250,16 @@ def _hdr(session_id: str) -> dict:
     return {"Authorization": f"Bearer {session_id}", "Content-Type": "application/json"}
 
 
-def detect_instance_url(session_id: str):
-    """
-    Auto-detect the Salesforce instance URL from a session ID alone.
-
-    Calls the standard OAuth2 userinfo endpoint at login.salesforce.com (and
-    test.salesforce.com as a fallback for sandboxes).  Salesforce returns the
-    org's REST base URL in the response regardless of whether the org uses a
-    custom domain, so the correct instance URL is always recovered.
-
-    Returns (ok: bool, instance_url: str, info: dict).
-    """
-    from urllib.parse import urlparse
-    for base in ("https://login.salesforce.com", "https://test.salesforce.com"):
-        try:
-            r = requests.get(
-                f"{base}/services/oauth2/userinfo",
-                headers=_hdr(session_id),
-                timeout=10,
-                allow_redirects=True,
-            )
-            if r.status_code == 200:
-                info = r.json()
-                # urls.rest is "https://<instance>/services/data/" — parse the origin
-                rest = info.get("urls", {}).get("rest", "")
-                if rest:
-                    p = urlparse(rest)
-                    return True, f"{p.scheme}://{p.netloc}", info
-        except Exception:
-            pass
-    return False, "", {}
+def sf_verify(instance_url: str, session_id: str):
+    """Ping the userinfo endpoint. Returns (ok: bool, info: dict)."""
+    try:
+        r = requests.get(
+            f"{instance_url}/services/oauth2/userinfo",
+            headers=_hdr(session_id), timeout=10,
+        )
+        return (True, r.json()) if r.status_code == 200 else (False, {})
+    except Exception:
+        return False, {}
 
 
 def search_reports(instance_url: str, session_id: str, term: str) -> list:
@@ -731,6 +684,12 @@ def excel_bytes(results: list, cses_df=None) -> bytes:
 with st.sidebar:
     st.markdown("### Salesforce Connection")
 
+    instance_url = st.text_input(
+        "Instance URL",
+        value=_DEFAULT_SF_URL,
+        placeholder="https://myorg.my.salesforce.com",
+        key="sf_url",
+    )
     session_id = st.text_input(
         "Session ID",
         type="password",
@@ -739,22 +698,22 @@ with st.sidebar:
     )
 
     if st.button("Connect", use_container_width=True):
-        if not session_id.strip():
-            st.error("Session ID is required.")
+        if not instance_url or not session_id:
+            st.error("Both fields are required.")
         else:
-            with st.spinner("Detecting instance and verifying session…"):
-                ok, instance_url, info = detect_instance_url(session_id.strip())
+            with st.spinner("Verifying session…"):
+                ok, info = sf_verify(instance_url.rstrip("/"), session_id)
             if ok:
                 st.session_state.update({
                     "connected":   True,
-                    "sf_instance": instance_url,
-                    "sf_token":    session_id.strip(),
+                    "sf_instance": instance_url.rstrip("/"),
+                    "sf_token":    session_id,
                 })
                 name = info.get("name") or info.get("preferred_username", "")
                 st.success(f"Connected{' — ' + name if name else ''}")
             else:
                 st.session_state["connected"] = False
-                st.error("Connection failed. Check your Session ID.")
+                st.error("Connection failed. Check URL and Session ID.")
 
     # ── CSEs + Run ───────────────────────────────────────────────────────────
     if st.session_state.get("connected"):
@@ -834,7 +793,6 @@ if not st.session_state.get("connected"):
 The session ID may appear in the page URL after `sid=`.
 
 The session ID expires when you log out or after your org's session timeout (typically 8 hours).
-The instance URL is detected automatically — no need to enter it manually.
         """)
     st.stop()
 
