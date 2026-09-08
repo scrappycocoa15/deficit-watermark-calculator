@@ -1146,9 +1146,9 @@ else:
                 pass
     max_deficit_n = max(populated_ns) if populated_ns else 0
 
-    # Identity (non-deficit) columns — Team / Leader always shown when present
+    # Identity columns — Team kept in master_df for filtering but not displayed
     identity_cols = [
-        c for c in ["Team", "Leader", "Rep", "Account Name", "Account ID"]
+        c for c in ["Leader", "Rep", "Account Name", "Account ID"]
         if c in filtered.columns
     ]
     # Deficit group columns in order, capped at max_deficit_n
@@ -1164,7 +1164,6 @@ else:
 
     # ── Column config ─────────────────────────────────────────────────────────
     col_cfg = {}
-    col_cfg["Team"]         = st.column_config.TextColumn("Team",         width="small")
     col_cfg["Leader"]       = st.column_config.TextColumn("Leader",       width="medium")
     col_cfg["Rep"]          = st.column_config.TextColumn("Rep",          width="medium")
     col_cfg["Account Name"] = st.column_config.TextColumn("Account Name", width="large")
@@ -1172,9 +1171,9 @@ else:
 
     for c in display_cols:
         if "Amount" in c:
-            col_cfg[c] = st.column_config.NumberColumn(c, format="$%.2f",     width="small")
+            col_cfg[c] = st.column_config.NumberColumn(c, format="$%.2f",     width="medium")
         elif "Effective Date" in c or "Clears" in c:
-            col_cfg[c] = st.column_config.DateColumn(c,   format="MM/DD/YYYY", width="small")
+            col_cfg[c] = st.column_config.DateColumn(c,   format="MM/DD/YYYY", width="medium")
         elif "Source" in c:
             col_cfg[c] = st.column_config.TextColumn(c, width="small")
 
