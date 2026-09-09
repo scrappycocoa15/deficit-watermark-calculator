@@ -514,16 +514,20 @@ def run_sf_report(instance_url: str, session_id: str, report_id: str,
         today   = _date.today()
         all_dfs = []
         t2_errs = []
+        cap_hit = False
 
-        # ── Tier 2: synchronous chunked Analytics API ────────────────────────
-        # Key insight: sending reportFilters in a POST body REPLACES the report's
-        # saved filters (including the division filter), forcing us to re-send them
-        # verbatim — a combination Salesforce has been rejecting.
-        #
-        # standardDateFilter is a SEPARATE metadata field: setting it only
-        # overrides the date range and leaves reportFilters untouched, so the
-        # division filter is preserved automatically.
+        # ── Tier 2: async chunked Analytics API ──────────────────────────────
+        # Each monthly window is POSTed to /instances (async endpoint) instead
+        # of the synchronous /reports/{id} endpoint.  This uses the async limit
+        # (1,200 instances/hour) rather than the sync limit (500/hour), which
+        # matters when 20+ leaders are running the app concurrently.
+        # Each chunk stays well under the 2,000-row async cap because it covers
+        # only one calendar month.
+        # standardDateFilter overrides only the date range; all saved report
+        # filters (e.g. division) remain intact.
         for i in range(9):
+            if cap_hit:
+                break
             y, mo = today.year, today.month - i
             while mo <= 0:
                 mo += 12; y -= 1
@@ -542,34 +546,75 @@ def run_sf_report(instance_url: str, session_id: str, report_id: str,
             if needs_detail:
                 chunk_meta["showDetails"] = True
 
-            r = requests.post(api, headers=h,
-                              json={"reportMetadata": chunk_meta}, timeout=60)
+            # Fire the async instance
+            post_r = requests.post(
+                f"{api}/instances",
+                headers=h,
+                json={"reportMetadata": chunk_meta},
+                timeout=30,
+            )
 
-            if r.status_code >= 400:
+            if post_r.status_code >= 400:
                 try:
-                    err_body = r.json()
+                    err_body = post_r.json()
                 except Exception:
-                    err_body = r.text[:800]
+                    err_body = post_r.text[:800]
                 t2_errs.append({
                     "month":  f"{y}-{mo:02d}",
-                    "status": r.status_code,
+                    "status": post_r.status_code,
                     "body":   err_body,
                 })
                 continue
 
-            chunk_df, chunk_all = _parse_report_response(r.json())
-
-            if not chunk_all:
+            inst_id = post_r.json().get("id")
+            if not inst_id:
                 t2_errs.append({
                     "month":  f"{y}-{mo:02d}",
-                    "status": "cap_exceeded",
-                    "body":   "Single month > 2,000 rows; weekly chunking would be needed.",
+                    "status": "no_id",
+                    "body":   str(post_r.json())[:400],
                 })
-                all_dfs = []
-                break
+                continue
 
-            if not chunk_df.empty:
-                all_dfs.append(chunk_df)
+            # Poll until complete (up to 60 × 2s = 120s per chunk)
+            for _ in range(60):
+                time.sleep(2)
+                poll = requests.get(
+                    f"{api}/instances/{inst_id}",
+                    headers=h,
+                    timeout=30,
+                )
+                poll.raise_for_status()
+                payload = poll.json()
+                status  = payload.get("attributes", {}).get("status", "")
+
+                if status == "Success":
+                    chunk_df, chunk_all = _parse_report_response(payload)
+                    if not chunk_all:
+                        t2_errs.append({
+                            "month":  f"{y}-{mo:02d}",
+                            "status": "cap_exceeded",
+                            "body":   "Single month > 2,000 rows; weekly chunking would be needed.",
+                        })
+                        all_dfs  = []
+                        cap_hit  = True
+                    elif not chunk_df.empty:
+                        all_dfs.append(chunk_df)
+                    break
+
+                if status in ("Error", "Cancelled"):
+                    code = payload.get("attributes", {}).get("errorCode", "Unknown")
+                    t2_errs.append({
+                        "month":  f"{y}-{mo:02d}",
+                        "status": f"async_{status}",
+                        "body":   code,
+                    })
+                    break
+            else:
+                t2_errs.append({
+                    "month":  f"{y}-{mo:02d}",
+                    "status": "timeout",
+                    "body":   "Async instance did not complete within 120s.",
+                })
 
         if all_dfs:
             return pd.concat(all_dfs, ignore_index=True), True, 2, t2_errs
